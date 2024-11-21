@@ -1,4 +1,4 @@
-# tinyken
+# tinykern
 
 this repo is a small exploration into writing `torch` extension kernels with `uv` tooling. 
 
