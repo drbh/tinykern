@@ -21,14 +21,9 @@ class MatMulConfig:
         )
 
 
-cpp_source = """
-torch::Tensor matmul_cuda_forward(torch::Tensor A, torch::Tensor B) {
-    return A.mm(B);
-}
-"""
-
 cuda_source = """
-extern "C" {
+__global__ void matmul_kernel(float* A, float* B, float* C, int N);
+
 __global__ void matmul_kernel(float* A, float* B, float* C, int N) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -41,6 +36,28 @@ __global__ void matmul_kernel(float* A, float* B, float* C, int N) {
         C[row * N + col] = sum;
     }
 }
+"""
+
+cpp_source = """
+#include <torch/extension.h>
+
+void matmul_kernel_wrapper(
+    torch::Tensor A,
+    torch::Tensor B,
+    torch::Tensor C,
+    dim3 grid,
+    dim3 block,
+    int N) {
+    
+    matmul_kernel<<<grid, block>>>(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        N);
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("matmul_kernel", &matmul_kernel_wrapper, "matmul kernel");
 }
 """
 
@@ -56,12 +73,12 @@ matmul_cuda = load_inline(
 def main():
     config = MatMulConfig()
 
-    A = torch.rand(config.size, config.size, device="cuda")
-    B = torch.rand(config.size, config.size, device="cuda")
-    C = torch.zeros(config.size, config.size, device="cuda")
+    A = torch.rand(config.size, config.size, device="cuda", dtype=torch.float32)
+    B = torch.rand(config.size, config.size, device="cuda", dtype=torch.float32)
+    C = torch.zeros(config.size, config.size, device="cuda", dtype=torch.float32)
 
     grid, block = config.grid_block_dims
-    matmul_cuda.matmul_kernel(grid=grid, block=block, args=(A, B, C, config.size))
+    matmul_cuda.matmul_kernel(A, B, C, dim3(grid), dim3(block), config.size)
 
     torch_result = torch.mm(A, B)
     max_diff = torch.max(torch.abs(C - torch_result)).item()
